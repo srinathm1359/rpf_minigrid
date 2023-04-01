@@ -68,7 +68,7 @@ parser.add_argument('--alpha', default=0.99, type=float,
                     help='RMSProp smoothing constant.')
 parser.add_argument('--momentum', default=0, type=float,
                     help='RMSProp momentum.')
-parser.add_argument('--epsilon', default=1e-5, type=float,
+parser.add_argument('--epsilon', default=1e-2, type=float,
                     help='RMSProp epsilon.')
 
 # Exploration Settings.
@@ -99,7 +99,7 @@ parser.add_argument('--no_reward', action='store_true',
 
 # Training Models.
 parser.add_argument('--model', default='vanilla',
-                    choices=['bebold'],
+                    choices=['bebold', 'rnd', 'vanilla'],
                     help='Model used for training the agent.')
 
 # Baselines for AMIGo paper.
