@@ -340,7 +340,7 @@ def train(flags):
 
             if timer() - last_checkpoint_time > flags.save_interval * 60:  
                 checkpoint(frames)
-                save_heatmap(frames)
+                # save_heatmap(frames)
                 last_checkpoint_time = timer()
 
             fps = (frames - start_frames) / (timer() - start_time)
