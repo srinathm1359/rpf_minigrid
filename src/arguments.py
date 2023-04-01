@@ -26,6 +26,7 @@ parser.add_argument('--save_interval', default=10, type=int, metavar='N',
                     help='Time interval (in minutes) at which to save the model.')    
 parser.add_argument('--checkpoint_num_frames', default=10000000, type=int,
                     help='Number of frames for checkpoint to load.')
+parser.add_argument('--gpus', default=0, type=int, help='Which device to use')
 
 # Training settings.
 parser.add_argument('--disable_checkpoint', action='store_true',

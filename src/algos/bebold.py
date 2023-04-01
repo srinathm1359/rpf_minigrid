@@ -174,7 +174,7 @@ def train(flags):
     flags.device = None
     if not flags.disable_cuda and torch.cuda.is_available():
         log.info('Using CUDA.')
-        flags.device = torch.device('cuda')
+        flags.device = torch.device(f'cuda:{flags.gpus}')
     else:
         log.info('Not using CUDA.')
         flags.device = torch.device('cpu')
