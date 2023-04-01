@@ -22,6 +22,8 @@ from src import atari_wrappers as atari_wrappers
 
 from gym_minigrid import wrappers as wrappers
 
+mp.set_sharing_strategy('file_system')
+
 # from nes_py.wrappers import JoypadSpace
 # from gym_super_mario_bros.actions import COMPLEX_MOVEMENT
 
