@@ -27,7 +27,7 @@ OMP_NUM_THREADS=1 python main.py --model bebold --env MiniGrid-KeyCorridorS3R2-v
 
 ### Train IMPALA on KeyCorridor
 ```
-OMP_NUM_THREADS=1 python main.py --model bebold --env MiniGrid-KeyCorridorS3R2-v0 --total_frames 10000000 --intrinsic_reward_coef 0 --entropy_cost 0.0005 --use_lstm --run_id 0
+OMP_NUM_THREADS=1 python main.py --env MiniGrid-KeyCorridorS3R2-v0 --total_frames 10000000 --entropy_cost 0.0005 --use_lstm --run_id 0
 ```
 
 ### Train NovelD on Unlock
@@ -37,5 +37,5 @@ OMP_NUM_THREADS=1 python main.py --model bebold --env MiniGrid-Unlock-v0 --total
 
 ### Train IMPALA on Unlock
 ```
-OMP_NUM_THREADS=1 python main.py --model bebold --env MiniGrid-Unlock-v0 --total_frames 10000000 --intrinsic_reward_coef 0 --entropy_cost 0.0005 --use_lstm --run_id 0
+OMP_NUM_THREADS=1 python main.py --env MiniGrid-Unlock-v0 --total_frames 10000000 --entropy_cost 0.0005 --use_lstm --run_id 0
 ```
