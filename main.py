@@ -12,6 +12,7 @@ from src.algos.curiosity import train as train_curiosity
 from src.algos.rnd import train as train_rnd
 from src.algos.ride import train as train_ride
 from src.algos.bebold import train as train_bebold
+from src.algos.rpf import train as train_rpf
 
 def main(flags):
     print(flags)
@@ -27,10 +28,12 @@ def main(flags):
         train_ride(flags)
     elif flags.model == 'bebold':
         train_bebold(flags)
+    elif flags.model == 'rpf':
+        train_rpf(flags)
     else:
         raise NotImplementedError("This model has not been implemented. "\
         "The available options are: vanilla, count, curiosity, rnd, ride, \
-        no-episodic-counts, and only-episodic-count.")
+        no-episodic-counts, only-episodic-count, and rpf.")
 
 if __name__ == '__main__':
     flags = parser.parse_args()
