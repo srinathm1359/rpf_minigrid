@@ -266,3 +266,44 @@ class MinigridForwardDynamicsNet(nn.Module):
         return next_state_emb
 
 
+class MinigridMLPPotentialNet(nn.Module):
+    def __init__(self):
+        super(MinigridMLPPotentialNet, self).__init__()
+
+        init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
+                            constant_(x, 0), nn.init.calculate_gain('relu'))
+
+        self.fc = nn.Sequential(
+            nn.Linear(1024, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+        )
+        self.last_layer = nn.Linear(in_features=128,out_features=128)
+        self.switch_eps = 10
+        self.current_count = 0
+
+    def init_last_layer(self):
+        # Reinitialize only the last layer of the potential function.
+        nn.init.orthogonal_(self.last_layer.weight, np.sqrt(2))
+        self.last_layer.bias.data.zero_()
+        self.last_layer.requires_grad = False
+
+    def forward(self, inputs, core_state=()):
+        # We call this twice every time we create intrinsic rewards
+        if self.current_count >= self.switch_eps:
+            self.init_last_layer()
+            self.current_count = 0
+        self.current_count += 0.5
+        
+        x = inputs
+        T, B, *_ = x.shape
+
+        x = self.fc(x)
+        x = self.last_layer(x)
+
+        state_embedding = x.reshape(T, B, -1)
+
+        return state_embedding, tuple()
