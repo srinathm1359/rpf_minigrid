@@ -11,6 +11,7 @@ import threading
 import time
 import timeit
 import pprint
+import json
 
 import numpy as np
 
@@ -27,17 +28,34 @@ import src.models as models
 import src.losses as losses
 
 from src.env_utils import FrameStack
-from src.utils import get_batch, log, create_env, create_buffers, act
+from src.utils import get_batch, log, create_env, create_buffers, act, create_heatmap_buffers
 
 MinigridPolicyNet = models.MinigridPolicyNet
 MinigridStateEmbeddingNet = models.MinigridStateEmbeddingNet
+MinigridMLPEmbeddingNet = models.MinigridMLPEmbeddingNet
+MinigridMLPTargetEmbeddingNet = models.MinigridMLPTargetEmbeddingNet
+
+def momentum_update(model, target, ema_momentum):
+    '''
+    Update the key_encoder parameters through the momentum update:
+    key_params = momentum * key_params + (1 - momentum) * query_params
+    '''
+    # For each of the parameters in each encoder
+    for p_m, p_t in zip(model.parameters(), target.parameters()):
+        p_m.data = p_m.data * ema_momentum + p_t.detach().data * (1. - ema_momentum)
+    # For each of the buffers in each encoder
+    for b_m, b_t in zip(model.buffers(), target.buffers()):
+        b_m.data = b_m.data * ema_momentum + b_t.detach().data * (1. - ema_momentum)
 
 def learn(actor_model,
           model,
           random_target_network,
           predictor_network,
+          actor_encoder,
+          encoder,
           batch,
           initial_agent_state, 
+          initial_encoder_state,
           optimizer,
           predictor_optimizer,
           scheduler,
@@ -46,26 +64,19 @@ def learn(actor_model,
           lock=threading.Lock()):
     """Performs a learning (optimization) step."""
     with lock:
-        if flags.use_fullobs_intrinsic:
-            random_embedding = random_target_network(batch, next_state=True)\
-                    .reshape(flags.unroll_length, flags.batch_size, 128)        
-            predicted_embedding = predictor_network(batch, next_state=True)\
-                    .reshape(flags.unroll_length, flags.batch_size, 128)
-        else:
-            random_embedding = random_target_network(batch['partial_obs'][1:].to(device=flags.device))
-            predicted_embedding = predictor_network(batch['partial_obs'][1:].to(device=flags.device))
 
-        intrinsic_rewards = torch.norm(predicted_embedding.detach() - random_embedding.detach(), dim=2, p=2)
+        encoded_states, unused_state = encoder(batch['partial_obs'].to(device=flags.device), initial_encoder_state, batch['done'])
+        random_embedding_next, unused_state = random_target_network(encoded_states[1:].detach(), initial_agent_state)
+        predicted_embedding_next, unused_state = predictor_network(encoded_states[1:].detach(), initial_agent_state)
 
         intrinsic_reward_coef = flags.intrinsic_reward_coef
-        intrinsic_rewards *= intrinsic_reward_coef 
+        intrinsic_rewards = torch.norm(predicted_embedding_next.detach() - random_embedding_next.detach(), dim=2, p=2) * intrinsic_reward_coef
         
         num_samples = flags.unroll_length * flags.batch_size
         actions_flat = batch['action'][1:].reshape(num_samples).cpu().detach().numpy()
         intrinsic_rewards_flat = intrinsic_rewards.reshape(num_samples).cpu().detach().numpy()
-
         rnd_loss = flags.rnd_loss_coef * \
-                losses.compute_forward_dynamics_loss(predicted_embedding, random_embedding.detach()) 
+                losses.compute_rnd_loss(predicted_embedding_next, random_embedding_next.detach()) 
             
         learner_outputs, unused_state = model(batch, initial_agent_state)
 
@@ -129,12 +140,13 @@ def learn(actor_model,
         predictor_optimizer.step()
 
         actor_model.load_state_dict(model.state_dict())
+        actor_encoder.load_state_dict(encoder.state_dict())
         return stats
 
 
 def train(flags):  
     if flags.xpid is None:
-        flags.xpid = 'rnd-%s' % time.strftime('%Y%m%d-%H%M%S')
+        flags.xpid = flags.env + '-rnd-%s' % time.strftime('%Y%m%d-%H%M%S')
     plogger = file_writer.FileWriter(
         xpid=flags.xpid,
         xp_args=flags.__dict__,
@@ -151,7 +163,7 @@ def train(flags):
     flags.device = None
     if not flags.disable_cuda and torch.cuda.is_available():
         log.info('Using CUDA.')
-        flags.device = torch.device('cuda')
+        flags.device = torch.device(f'cuda:{flags.gpus}')
     else:
         log.info('Not using CUDA.')
         flags.device = torch.device('cpu')
@@ -162,23 +174,24 @@ def train(flags):
 
     if 'MiniGrid' in flags.env: 
         if flags.use_fullobs_policy:
-            model = FullObsMinigridPolicyNet(env.observation_space.shape, env.action_space.n)                        
+            raise Exception('We have not implemented full ob policy!')
         else:
             model = MinigridPolicyNet(env.observation_space.shape, env.action_space.n)    
-        if flags.use_fullobs_intrinsic:                        
-            random_target_network = FullObsMinigridStateEmbeddingNet(env.observation_space.shape).to(device=flags.device) 
-            predictor_network = FullObsMinigridStateEmbeddingNet(env.observation_space.shape).to(device=flags.device)             
-        else:
-            random_target_network = MinigridStateEmbeddingNet(env.observation_space.shape).to(device=flags.device) 
-            predictor_network = MinigridStateEmbeddingNet(env.observation_space.shape).to(device=flags.device) 
+        random_target_network = MinigridMLPTargetEmbeddingNet().to(device=flags.device) 
+        predictor_network = MinigridMLPEmbeddingNet().to(device=flags.device) 
+        encoder = MinigridStateEmbeddingNet(env.observation_space.shape, flags.use_lstm)
     else:
-        model = MarioDoomPolicyNet(env.observation_space.shape, env.action_space.n)
-        random_target_network = MarioDoomStateEmbeddingNet(env.observation_space.shape).to(device=flags.device) 
-        predictor_network = MarioDoomStateEmbeddingNet(env.observation_space.shape).to(device=flags.device) 
+        raise Exception('Only MiniGrid is suppported Now!')
+
+    momentum_update(encoder.feat_extract, model.feat_extract, 0)
+    momentum_update(encoder.fc, model.fc, 0)
+    if flags.use_lstm:
+        momentum_update(encoder.core, model.core, 0)
     
     buffers = create_buffers(env.observation_space.shape, model.num_actions, flags)
-    
+    heatmap_buffers = create_heatmap_buffers(env.observation_space.shape)
     model.share_memory()
+    encoder.share_memory()
     
     initial_agent_state_buffers = []
     for _ in range(flags.num_buffers):
@@ -186,33 +199,43 @@ def train(flags):
         for t in state:
             t.share_memory_()
         initial_agent_state_buffers.append(state)
+    initial_encoder_state_buffers = []
+    for _ in range(flags.num_buffers):
+        state = encoder.initial_state(batch_size=1)
+        for t in state:
+            t.share_memory_()
+        initial_encoder_state_buffers.append(state)
 
     actor_processes = []
     ctx = mp.get_context('fork')
-    free_queue = ctx.SimpleQueue()
-    full_queue = ctx.SimpleQueue()
+    free_queue = ctx.Queue()
+    full_queue = ctx.Queue()
 
     episode_state_count_dict = dict()
     train_state_count_dict = dict()
+    partial_state_count_dict = dict()
+    encoded_state_count_dict = dict()
+    heatmap_dict = dict()
     for i in range(flags.num_actors):
         actor = ctx.Process(
             target=act,
-            args=(i, free_queue, full_queue, model, buffers, 
-                episode_state_count_dict, train_state_count_dict, 
-                initial_agent_state_buffers, flags))
+            args=(i, free_queue, full_queue, model, encoder, buffers, 
+                episode_state_count_dict, train_state_count_dict, partial_state_count_dict, encoded_state_count_dict,
+                heatmap_dict, heatmap_buffers, initial_agent_state_buffers, initial_encoder_state_buffers, flags))
         actor.start()
         actor_processes.append(actor)
 
     if 'MiniGrid' in flags.env: 
         if flags.use_fullobs_policy:
-            learner_model = FullObsMinigridPolicyNet(env.observation_space.shape, env.action_space.n)\
-                .to(device=flags.device)
+            raise Exception('We have not implemented full ob policy!')
         else:
             learner_model = MinigridPolicyNet(env.observation_space.shape, env.action_space.n)\
                 .to(device=flags.device)
+            learner_encoder = MinigridStateEmbeddingNet(env.observation_space.shape, flags.use_lstm)\
+                .to(device=flags.device)
     else:
-        learner_model = MarioDoomPolicyNet(env.observation_space.shape, env.action_space.n)\
-            .to(device=flags.device)
+        raise Exception('Only MiniGrid is suppported Now!')
+    learner_encoder.load_state_dict(encoder.state_dict())
 
     optimizer = torch.optim.RMSprop(
         learner_model.parameters(),
@@ -220,14 +243,10 @@ def train(flags):
         momentum=flags.momentum,
         eps=flags.epsilon,
         alpha=flags.alpha)
-    
-    predictor_optimizer = torch.optim.RMSprop(
-        predictor_network.parameters(),
-        lr=flags.learning_rate,
-        momentum=flags.momentum,
-        eps=flags.epsilon,
-        alpha=flags.alpha)
-    
+
+    predictor_optimizer = torch.optim.Adam(
+        predictor_network.parameters(), 
+        lr=flags.predictor_learning_rate)
 
     def lr_lambda(epoch):
         return 1 - min(epoch * T * B, flags.total_frames) / flags.total_frames
@@ -258,11 +277,11 @@ def train(flags):
         timings = prof.Timings()
         while frames < flags.total_frames:
             timings.reset()
-            batch, agent_state = get_batch(free_queue, full_queue, buffers, 
-                initial_agent_state_buffers, flags, timings)
+            batch, agent_state, encoder_state = get_batch(free_queue, full_queue, buffers, 
+                initial_agent_state_buffers, initial_encoder_state_buffers, flags, timings)
             stats = learn(model, learner_model, random_target_network, predictor_network,
-                          batch, agent_state, optimizer, predictor_optimizer, scheduler, 
-                          flags, frames=frames)
+                          encoder, learner_encoder, batch, agent_state, encoder_state, optimizer, 
+                          predictor_optimizer, scheduler, flags, frames=frames)
             timings.time('learn')
             with lock:
                 to_log = dict(frames=frames)
@@ -288,10 +307,11 @@ def train(flags):
         if flags.disable_checkpoint:
             return
         checkpointpath = os.path.expandvars(os.path.expanduser(
-            '%s/%s/%s' % (flags.savedir, flags.xpid,'model.tar')))
+            '%s/%s/%s' % (flags.savedir, flags.xpid,'model_'+str(frames)+'.tar')))
         log.info('Saving checkpoint to %s', checkpointpath)
         torch.save({
             'model_state_dict': model.state_dict(),
+            'encoder': encoder.state_dict(),
             'random_target_network_state_dict': random_target_network.state_dict(),
             'predictor_network_state_dict': predictor_network.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
