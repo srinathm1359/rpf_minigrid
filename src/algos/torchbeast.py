@@ -217,7 +217,13 @@ def train(flags):
         alpha=flags.alpha)
 
     def lr_lambda(epoch):
-        return 1 - min(epoch * T * B, flags.total_frames) / flags.total_frames
+        """
+        Act as if the total frames is 50M
+        Then, we can run for less steps and use the same schedule as the NovelD paper
+        This makes the learning rate decay at a slower rate
+        """
+        tot_frames = 5 * 1e7
+        return 1 - min(epoch * T * B, tot_frames) / tot_frames
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 

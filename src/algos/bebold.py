@@ -194,10 +194,12 @@ def train(flags):
     else:
         raise Exception('Only MiniGrid is suppported Now!')
 
+    # SLOW?
     momentum_update(encoder.feat_extract, model.feat_extract, 0)
     momentum_update(encoder.fc, model.fc, 0)
     if flags.use_lstm:
         momentum_update(encoder.core, model.core, 0)
+    ### SLOW?
     
     buffers = create_buffers(env.observation_space.shape, model.num_actions, flags)
     heatmap_buffers = create_heatmap_buffers(env.observation_space.shape)
@@ -260,7 +262,13 @@ def train(flags):
         lr=flags.predictor_learning_rate)
 
     def lr_lambda(epoch):
-        return 1 - min(epoch * T * B, flags.total_frames) / flags.total_frames
+        """
+        Act as if the total frames is 50M
+        Then, we can run for less steps and use the same schedule as the NovelD paper
+        This makes the learning rate decay at a slower rate
+        """
+        tot_frames = 5 * 1e7
+        return 1 - min(epoch * T * B, tot_frames) / tot_frames
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
@@ -281,17 +289,23 @@ def train(flags):
 
     frames, stats = 0, {}
 
+    # SLOW?
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
         nonlocal frames, stats
         timings = prof.Timings()
         while frames < flags.total_frames:
             timings.reset()
+            t0 = time.time()
             batch, agent_state, encoder_state = get_batch(free_queue, full_queue, buffers, 
                 initial_agent_state_buffers, initial_encoder_state_buffers, flags, timings)
+            t1 = time.time()
             stats = learn(model, learner_model, random_target_network, predictor_network,
                           encoder, learner_encoder, batch, agent_state, encoder_state, optimizer, 
                           predictor_optimizer, scheduler, flags, frames=frames)
+            t2 = time.time()
+            print('get batch time:', t1 - t0)
+            print('learn time', t2 - t1)
             timings.time('learn')
             with lock:
                 to_log = dict(frames=frames)
@@ -301,6 +315,7 @@ def train(flags):
 
         if i == 0:
             log.info('Batch and learn: %s', timings.summary())
+    ### SLOW
 
     for m in range(flags.num_buffers):
         free_queue.put(m)
